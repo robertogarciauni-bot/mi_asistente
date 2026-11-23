@@ -1,0 +1,32 @@
+{
+  "name": "Mi Asistente",
+  "short_name": "Asistente",
+  "description": "Recordatorios y agenda",
+  "lang": "es",
+  "start_url": "/mi_asistente/",
+  "scope": "/mi_asistente/",
+  "display": "standalone",
+  "background_color": "#f6f4ef",
+  "theme_color": "#1f6f5c",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "id": "/mi_asistente/"
+}

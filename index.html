@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mi Asistente</title>
+<meta name="theme-color" content="#1f6f5c">
+<meta name="robots" content="noindex,nofollow">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Asistente">
+<style>
+:root{--bg:#f6f4ef;--ink:#1d2321;--muted:#66706c;--acc:#1f6f5c;--card:#fff;--line:#e3dfd6}
+@media (prefers-color-scheme: dark){:root{--bg:#121614;--ink:#e8ece9;--muted:#9aa5a0;--acc:#4fb39a;--card:#1b211e;--line:#2c3430}}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+#cascaron{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;box-sizing:border-box;text-align:center}
+.giro{width:34px;height:34px;border:3px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:g 1s linear infinite}
+@keyframes g{to{transform:rotate(360deg)}}
+.hide{display:none!important}
+button{font:inherit;padding:10px 16px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.muted{color:var(--muted);font-size:14px;max-width:340px}
+textarea{width:100%;max-width:340px;box-sizing:border-box;font:12px monospace;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:8px}
+</style>
+</head>
+<body>
+<!-- Cascarón público: no contiene datos. La app real va cifrada en app.enc.json y solo se abre
+     con la llave privada que vive en el celular del dueño (ver herramientas/cifrar-app.mjs). -->
+<div id="cascaron">
+  <div id="cargando" class="giro"></div>
+  <div id="cerrada" class="hide">
+    <div style="font-size:48px">🔒</div>
+    <h2 style="margin:6px 0">App privada</h2>
+    <p class="muted" id="cerradaMsg"></p>
+    <div id="codigoBox" class="hide">
+      <textarea id="codigo" rows="4" readonly></textarea><br>
+      <button id="btnCopiar" style="margin-top:8px">Copiar código</button>
+    </div>
+    <div id="dueno" style="margin-top:28px;display:flex;flex-direction:column;gap:8px;align-items:center">
+      <button id="btnRecuperar">📂 Recuperar copia</button>
+      <button id="btnLlave" class="hide">Crear llave en este celular</button>
+      <input type="file" id="archivo" accept="application/json,.json" class="hide">
+    </div>
+  </div>
+</div>
+<script>
+(()=>{
+const PRIV="asistente-roster-llave", PUB="asistente-roster-pub", COPIA="asistente-app-cifrada";
+const $=id=>document.getElementById(id);
+const get=k=>{ try{ return localStorage.getItem(k); }catch(e){ return null; } };
+const set=(k,v)=>{ try{ v==null?localStorage.removeItem(k):localStorage.setItem(k,v); }catch(e){} };
+const ab=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const b64=u=>btoa(String.fromCharCode(...u)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js",{updateViaCache:"none"}).catch(()=>{});
+
+function cerrada(msg, conCodigo){
+  $("cargando").classList.add("hide"); $("cerrada").classList.remove("hide");
+  $("cerradaMsg").textContent=msg||"";
+  const pub=get(PUB);
+  if(conCodigo && pub){ $("codigo").value="ROSTER-PUB:"+btoa(pub); $("codigoBox").classList.remove("hide"); }
+  $("btnLlave").classList.toggle("hide", !!get(PRIV));
+}
+async function traer(){
+  const ctl=new AbortController(), t=setTimeout(()=>ctl.abort(),6000);
+  try{ const r=await fetch("app.enc.json?t="+Date.now(),{cache:"no-store",signal:ctl.signal});
+    if(r.ok){ const txt=await r.text(); JSON.parse(txt); set(COPIA,txt); return txt; } }catch(e){}
+  finally{ clearTimeout(t); }
+  return get(COPIA); // sin señal: la última versión que se abrió en este celular
+}
+async function abrir(){
+  const jwk=JSON.parse(get(PRIV)||"null");
+  if(!jwk){ cerrada(""); return; }
+  const txt=await traer(); if(!txt){ cerrada("Sin conexión. Vuelve a intentar cuando tengas señal."); return; }
+  const f=JSON.parse(txt), mio=JSON.parse(get(PUB)||"{}");
+  if(f.kid && mio.kid && f.kid!==mio.kid){ cerrada("La app está cifrada para otra llave. Envía este código a Claude:", true); return; }
+  try{
+    const priv=await crypto.subtle.importKey("jwk",jwk,{name:"ECDH",namedCurve:"P-256"},false,["deriveBits"]);
+    const epk=await crypto.subtle.importKey("jwk",f.epk,{name:"ECDH",namedCurve:"P-256"},false,[]);
+    const sec=await crypto.subtle.deriveBits({name:"ECDH",public:epk},priv,256);
+    const hk=await crypto.subtle.importKey("raw",sec,"HKDF",false,["deriveKey"]);
+    const key=await crypto.subtle.deriveKey({name:"HKDF",hash:"SHA-256",salt:ab(f.salt),info:new TextEncoder().encode("mi-asistente-roster-v2")},hk,{name:"AES-GCM",length:256},false,["decrypt"]);
+    let plano=await crypto.subtle.decrypt({name:"AES-GCM",iv:ab(f.iv)},key,ab(f.ct));
+    if(f.z==="gzip") plano=await new Response(new Blob([plano]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+    const html=new TextDecoder().decode(plano);
+    document.open(); document.write(html); document.close();
+  }catch(e){ cerrada("No pude abrir la app con la llave de este celular. Envía este código a Claude:", true); }
+}
+$("btnCopiar").onclick=async()=>{ try{ await navigator.clipboard.writeText($("codigo").value); $("btnCopiar").textContent="Copiado ✓"; }catch(e){ $("codigo").select(); } };
+$("btnRecuperar").onclick=()=>$("archivo").click();
+$("archivo").onchange=async e=>{ const a=e.target.files[0]; if(!a) return;
+  try{ const d=JSON.parse(await a.text()); if(d.app!=="mi-asistente"||!d.S) throw 0;
+    if(!(d.extra&&d.extra[PRIV])){ $("cerradaMsg").textContent="Esa copia no trae la llave de la app."; return; }
+    set("asistente-v1",JSON.stringify(d.S)); Object.entries(d.extra).forEach(([k,v])=>set(k,v)); location.reload();
+  }catch(x){ $("cerradaMsg").textContent="Ese archivo no es una copia de Mi Asistente."; } };
+$("btnLlave").onclick=async()=>{ if(get(PRIV)) return;
+  const par=await crypto.subtle.generateKey({name:"ECDH",namedCurve:"P-256"},true,["deriveBits"]);
+  const pub=await crypto.subtle.exportKey("jwk",par.publicKey), priv=await crypto.subtle.exportKey("jwk",par.privateKey);
+  set(PRIV,JSON.stringify(priv)); set(PUB,JSON.stringify({kty:pub.kty,crv:pub.crv,x:pub.x,y:pub.y,kid:b64(crypto.getRandomValues(new Uint8Array(6)))}));
+  cerrada("Envía este código a Claude para que la app se abra en este celular:", true); };
+abrir().catch(()=>cerrada(""));
+})();
+</script>
+</body>
+</html>
